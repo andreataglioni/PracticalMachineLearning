@@ -1,0 +1,139 @@
+---
+output: html_document
+---
+Practical Machine Learning - Barbell Lift exercise
+=============================================
+**Coursera: Practical Machine Learning Assignment**, by A. Taglioni, Saturday, Jan 24th, 2015 
+ 
+## Assignment 
+Starting from accelerometer sensor data (arm, forearm, belt, dumbell) data present at **http://groupware.les.inf.puc-rio.br/har**, the Assignment asks to *predict which of 5 different ways the exercise has been done by different individuals*.
+The assignment asks to do a **Write-up** to explain how model has been made (this document), and a **Programming task**, in order to apply the model to 20 cases to be classified.
+
+## Summary of results
+After loading the data and cleaning a number of columns which I considered not relevant for my model, I trained a Random Forest model on 60% of data, with 0.7% in-sample error, validated it with residual 40% of data, with a out-of-sample error of 0.9%, and finally applied to the 20 test cases obtaining a 100% correspondence according to Coursera results validation page.
+
+## Execution
+### Step 1: Data Loading
+
+First, let us load the data.
+```{r setoptionsandload,warning=FALSE}
+library("caret")
+library("randomForest")
+library("knitr")
+opts_chunk$set(echo=TRUE, message=FALSE)
+
+trainingfilepath = "pml-training.csv"
+testingfilepath = "pml-testing.csv"
+
+traindata <- read.csv(trainingfilepath, header=TRUE, sep=",", na.strings = c("","#DIV/0!","NA"), quote="\"")
+finaltest  <- read.csv(testingfilepath, header=TRUE, sep=",", na.strings = c("","#DIV/0!","NA"), quote="\"")
+
+dim(traindata)
+dim(finaltest)
+```
+
+The training dataset consists of 19622 observations on 160 features, the test set consists of 20 observations with 160 features.
+
+Let us see the first 20 columns of the 160:
+```{r analysetraindata}
+str(traindata, list.len=20)
+```
+The first 7 columns contain information about the observation such as user, timestamp and windows.
+All following columns contain sensor data, and are either similar to *roll_belt* (i.e. numeric) or to *kurtosis_roll_belt* (i.e. mostly NA).
+
+### Step 2: Data reduction
+
+As seen above, dataset contains a huge number of columns, which probably need to be reduced before being imputed to a model. 
+I don't want my model to be based on user name or time of the day, but only on sensor movement data, so I start discarding columns 1 to 7, and divide training set (60%) from validation set: 
+```{r FirstCleaning, cache = TRUE}
+#remove first 7 columns
+traindata <- traindata[,-c(1, 2, 3, 4, 5, 6, 7)]
+finaltest <- finaltest[,-c(1, 2, 3, 4, 5, 6, 7)]
+
+set.seed(11111)
+inTrain <- createDataPartition(y=traindata$classe, p=0.6, list=FALSE)
+training <- traindata[inTrain,]
+validation <- traindata[-inTrain,]
+```
+
+A lot of columns contain mostly NA. 
+I tried a lot of models for this Assignment using those columns, but I finally was convinced that they could not bring value to the model, so let's remove columns having more than 70% of NA values.
+I define which are these columns in training set and then remove them also in validation set and final test set:
+```{r RemovemostlyNAcols, cache=TRUE}
+ConsideredColumnSet <- !(colSums(is.na(training))>0.7*nrow(training))
+
+training <- training[,ConsideredColumnSet]
+validation <- validation[,ConsideredColumnSet]
+finaltest <- finaltest[,ConsideredColumnSet]
+
+dim(training)
+dim(validation)
+```
+Training set is now of 11776 observations of 53 features, while validation is now of 7846 observations of the same features.
+
+### Step 3: Model Training with Cross Validation 
+I choose to use a RandomForest method, since on this kind of classification problems it's usually best performing versus other models or versus simple trees.
+Moreover, *caret* package *train()* function, internally performs cross-validation with Bootstrap resampling to choose/tune parameters. 
+NOTE: I also tried other models and variants but this one is the most performing I found.
+
+```{r modeltrain, cache=TRUE}
+modFit <- train(classe~ .,data=training,method="rf")
+print(modFit) 
+```
+Model selected with Bootstrapping (25 repetitions, each tree is constructed using a different bootstrap sample from the original data) was the one with mtry=27 (27 variables at each split), which has 98.76% accuracy.
+
+```{r finalmodel}
+print(modFit$finalModel)  
+```
+Model has an out-of-bag error of only 0.7%.
+
+Let us calculate in-sample error:
+```{r insampleerror}
+inSampleError <- 1-sum(diag(modFit$finalModel$confusion))/sum(modFit$finalModel$confusion)
+inSampleError
+```
+In sample error is only 0.7%
+
+Let now see variable importance in the model:
+```{r variableimportance}
+varImp(modFit)
+```
+*roll_belt* is by far the most important variable, following 6 variables have an importance from 40% to 60% of *roll_belt*, next ones have an importance at most 20% of *roll_belt* in the model.
+
+### Step 4: Model check with Validation set
+The model looks good!
+Now let us try the model against the validation set to check its performance...
+
+```{r prediction}
+check <- predict(modFit$finalModel, newdata=validation[,-ncol(validation)])
+confMatrix <- confusionMatrix(check, validation$classe)
+confMatrix
+```
+Accuracy is 99% with very low p-value. Let's see out-of-sample error:
+```{r ooserror}
+outOfSampleError <- 1-sum(diag(confMatrix$table))/sum(confMatrix$table)
+outOfSampleError
+```
+Out of sample error is 0.9%, so this model seems to be ready to be run on the Coursera Assignment test set.
+
+### Step 5: Classification Prediction on test set 
+Finally, let's proceed predicting exercise type (variable *classe*) for final testset
+```{r predictOnTestset, cache=TRUE}
+answers <- predict(modFit, newdata=finaltest)
+answers
+```
+
+### Step 6: Spooling Prediction to output files  
+And at the end let's produce spool files for the Programming assignment...
+```{r spoolfile}
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+
+pml_write_files(answers)
+```
+20 output files were produced and uploaded to Coursera Validation page with 100% success.
